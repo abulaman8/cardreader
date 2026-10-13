@@ -1,0 +1,1 @@
+"""Card spotting package."""

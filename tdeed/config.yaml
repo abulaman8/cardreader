@@ -1,0 +1,97 @@
+# T-DEED replica for card spotting (binary: card vs background), 5 fps, 224x398 full frame.
+# Reference: Xarles et al., "T-DEED: Temporal-Discriminability Enhancer Encoder-Decoder for Precise Event
+# Spotting in Sports Videos" (CVPRW 2024), github.com/arturxe2/T-DEED (SoccerNetBall config as baseline).
+# Override any key: python -m tdeed.train --set train.batch_size=2 model.d_model=null
+
+paths:
+  data_root: soccernet_data
+  split: benchmark/split.json          # frozen 400 / 50 / 50 (read-only)
+  index: data/tdeed/index.json
+  eval_frames: frames/eval             # existing 5 fps val/test half cache (read-only)
+  train_frames: frames_tdeed/train     # long train windows written by tdeed.extract
+  runs: runs
+
+data:
+  fps: 5
+  frame_h: 224
+  frame_w: 398
+  jpeg_quality: 90
+  window_s: 40                         # cached train window (200 frames); model clip is cropped from it
+  clip_len: 100                        # model input: 100 frames = 20 s (T-DEED clip_len)
+  neg_exclusion_s: 60                  # negative windows: the WHOLE window is >= 60 s from any card
+  neg_pool: 6000                       # cached negative windows (~26 GB)
+  neg_mix: {random: 0.5, foul: 0.3, stoppage: 0.2}
+  neg_per_pos: 1.5                     # per epoch: all positive windows + 1.5x negatives
+  mined_frac: 0.3                      # max share of negatives from mined windows (later rounds only)
+  ignore_radius_s: 5                   # frames within +-5 s of a 'not shown' card get zero loss
+  val_neg_per_pos: 1.5                 # val clip-loss set
+  seed: 0
+
+targets:
+  radius: 4                            # T-DEED radi_displacement: frames within +-4 (0.8 s) of a card are 'card'
+  fg_weight: 5                         # CE weight of the card class (T-DEED fg_weight)
+  disp_weight: 1.0                     # MSE displacement loss weight
+
+model:
+  backbone: regnety_002                # timm RegNetY-200MF, ImageNet init
+  pretrained: true
+  shift: gsm                           # Gate-Shift Module in the residual branch ('none' to disable)
+  shift_div: 4                         # GSM on 1/4 of conv1 input channels
+  shift_stages: [s3, s4]               # T-DEED: only the last two stages
+  d_model: 256                         # projection of the 368-d backbone feature; null = no projection (original)
+  n_layers: 2                          # encoder-decoder levels
+  sgp_ks: 9
+  sgp_r: 4
+  head_dropout: 0.5
+  grad_checkpoint: true                # per-stage checkpointing of the backbone (8 GB VRAM)
+
+augment:                               # T-DEED clip-level augmentation (same params for all frames of a clip)
+  p_hue: 0.25
+  hue: 0.2
+  p_saturation: 0.25
+  saturation: [0.7, 1.2]
+  p_brightness: 0.25
+  brightness: [0.7, 1.2]
+  p_contrast: 0.25
+  contrast: [0.7, 1.2]
+  p_blur: 0.25
+  blur_kernel: 5
+  hflip: 0.5
+  mixup: true                          # T-DEED mixup, lambda ~ Beta(alpha, alpha)
+  mixup_alpha: 0.2
+
+train:
+  batch_size: 4
+  acc_grad: 1
+  epochs: 40
+  warmup_epochs: 3                     # linear warmup (from 1%) then cosine, stepped per optimizer step
+  lr_head: 8.0e-4
+  lr_backbone: 2.0e-4
+  weight_decay: 0.01
+  grad_clip: 1.0
+  amp: true
+  ema_decay: 0.999
+  num_workers: 0                       # items are raw JPEG bytes; decode happens batched on the GPU
+  log_every: 100
+  spot_every: 3                        # full-half spotting every N epochs (and the last epoch)
+  spot_subset: val_v1                  # 20 val games
+  patience: 4                          # early stop after N spotting evaluations without improvement; 0 = off
+  select_metric: ap5
+
+infer:
+  overlap: 0.5                         # sliding 100-frame windows, 50% overlap
+  windows_per_batch: 4
+  vote: true                           # T-DEED displacement voting (frame t -> t - displ, max aggregation)
+  nms_window_s: 10                     # +-5 s, matches the benchmark tolerance
+  min_score: 0.01
+
+eval:
+  tolerance_s: 5
+  thresholds: [0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
+  loose_deltas: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]
+
+mine:
+  games_per_round: 100                 # train games scanned per round (rotating)
+  min_score: 0.30
+  max_per_half: 20
+  tmp_dir: frames_tdeed/tmp

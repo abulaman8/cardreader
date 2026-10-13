@@ -1,0 +1,117 @@
+paths:
+  data_root: soccernet_data
+  split: benchmark/split.json
+  index: data/tdeed/index.json
+  eval_frames: frames/eval
+  train_frames: frames_tdeed/train
+  runs: runs
+data:
+  fps: 5
+  frame_h: 224
+  frame_w: 398
+  jpeg_quality: 90
+  window_s: 40
+  clip_len: 100
+  neg_exclusion_s: 60
+  neg_pool: 6000
+  neg_mix:
+    random: 0.5
+    foul: 0.3
+    stoppage: 0.2
+  neg_per_pos: 1.5
+  mined_frac: 0.3
+  ignore_radius_s: 5
+  val_neg_per_pos: 1.5
+  seed: 0
+targets:
+  radius: 4
+  fg_weight: 5
+  disp_weight: 1.0
+model:
+  backbone: regnety_002
+  pretrained: true
+  shift: gsm
+  shift_div: 4
+  shift_stages:
+  - s3
+  - s4
+  d_model: 256
+  n_layers: 2
+  sgp_ks: 9
+  sgp_r: 4
+  head_dropout: 0.5
+  grad_checkpoint: true
+augment:
+  p_hue: 0.25
+  hue: 0.2
+  p_saturation: 0.25
+  saturation:
+  - 0.7
+  - 1.2
+  p_brightness: 0.25
+  brightness:
+  - 0.7
+  - 1.2
+  p_contrast: 0.25
+  contrast:
+  - 0.7
+  - 1.2
+  p_blur: 0.25
+  blur_kernel: 5
+  hflip: 0.5
+  mixup: true
+  mixup_alpha: 0.2
+train:
+  batch_size: 4
+  acc_grad: 1
+  epochs: 40
+  warmup_epochs: 3
+  lr_head: 0.0008
+  lr_backbone: 0.0002
+  weight_decay: 0.01
+  grad_clip: 1.0
+  amp: true
+  ema_decay: 0.999
+  num_workers: 0
+  log_every: 100
+  spot_every: 3
+  spot_subset: val_v1
+  patience: 4
+  select_metric: ap5
+infer:
+  overlap: 0.5
+  windows_per_batch: 4
+  vote: true
+  nms_window_s: 10
+  min_score: 0.01
+eval:
+  tolerance_s: 5
+  thresholds:
+  - 0.7
+  - 0.75
+  - 0.8
+  - 0.85
+  - 0.9
+  - 0.95
+  loose_deltas:
+  - 5
+  - 10
+  - 15
+  - 20
+  - 25
+  - 30
+  - 35
+  - 40
+  - 45
+  - 50
+  - 55
+  - 60
+mine:
+  games_per_round: 100
+  min_score: 0.3
+  max_per_half: 20
+  tmp_dir: frames_tdeed/tmp
+_cli:
+  init: null
+  mined:
+  - data/tdeed/mined_round1.json

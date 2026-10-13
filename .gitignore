@@ -1,0 +1,56 @@
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Virtual environments & IDE
+venv/
+.venv/
+env/
+.idea/
+.vscode/
+
+# Datasets, raw media, feature & frame caches
+soccernet_data/
+frames/
+frames_tdeed/
+features/
+data/
+*.mkv
+*.mp4
+*.avi
+*.webm
+*.jpg
+*.jpeg
+*.png
+*.npy
+*.npz
+*.tar
+*.tar.gz
+*.zip
+
+# Temporary files, JSON data/split caches, and partial logs
+*.tmp
+*.tmp.*
+*.partial.jsonl
+*.json
+*.jsonl
+
+# Logs, monitoring, background tasks, tensorboard
+*.log
+tb/
+events.out.tfevents.*
+.system_generated/
+
+# Evaluation outputs, calibrated and raw test/val prediction dumps
+bench/
+calibrated/
+raw/
+predictions/
+runs/baseline/
+
+# Intermediate epoch checkpoints and optimizer resume states
+epoch_*.pt
+last.pt

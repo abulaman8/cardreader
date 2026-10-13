@@ -1,0 +1,86 @@
+# v2: end-to-end RegNetY-400MF + TSM + spatial attention pooling + temporal transformer, 5 fps.
+# Override any key: --set data.neg_per_pos=3 train.batch_size=6
+
+paths:
+  data_root: soccernet_data
+  split: benchmark/split.json        # frozen 400 / 50 / 50
+  index: data/v2/index.json
+  frames: frames                     # JPEG frame cache
+  runs: runs
+
+data:
+  fps: 5
+  cache_len: 45                      # cached frames per training clip (9 s)
+  window: 25                         # model input: 5 s
+  margin: 7                          # card frame kept in [7, 17]
+  neg_exclusion_s: 60
+  neg_pool: 20000
+  neg_mix: {random: 0.5, foul: 0.3, stoppage: 0.2}
+  neg_per_pos: 2.5                   # 1 : 2.5 class balance per epoch
+  mined_frac: 0.3                    # max share of each epoch's negatives taken from mined hard negatives
+  eval_neg_per_pos: 2.5              # val clip-level metrics
+  jpeg_quality: 90
+  frame_h: 224
+  frame_w: 398
+  seed: 0
+
+targets:
+  sigma: 5                           # Gaussian confidence target, frames (1 s)
+  disp_radius: 10                    # displacement supervised within +-R frames (2 s); target (card - t) / R
+  clip_weight: 0.5
+  disp_weight: 1.0
+
+model:
+  backbone: regnet_y_400mf
+  pretrained: true                   # ImageNet weights via torchvision (downloaded on first use)
+  tsm_fold_div: 8                    # shift 1/8 channels forward + 1/8 backward in time
+  attn_heads: 4                      # spatial attention pooling heads
+  d_model: 256
+  layers: 4
+  heads: 4
+  ffn: 1024
+  dropout: 0.2
+  attn_dropout: 0.1
+  input_dropout: 0.1
+  grad_checkpoint: false             # peak ~3.9 GB fits comfortably in 8GB RTX 4060; avoids Python 3.13 checkpoint generator segfaults
+
+augment:
+  hflip: 0.5
+  color_jitter: 0.2                  # brightness / contrast / saturation, +-20%
+  crop_scale: [0.8, 1.0]             # random resized crop (same for all frames of a clip)
+
+train:
+  batch_size: 8
+  epochs: 30
+  lr_backbone: 1.0e-4
+  lr_head: 3.0e-4
+  weight_decay: 0.05
+  warmup: 0.05
+  grad_clip: 1.0
+  amp: true
+  ema_decay: 0.999
+  num_workers: 0
+  spot_every: 3                      # full-half val spotting every N epochs (and on the last epoch)
+  spot_subset: val_v1                # 'val_v1' (20 games, fast) or 'val' (all 50)
+  spot_stride: 10                    # sliding stride for train-time spotting (frames)
+  patience: 4                        # early stop after N spotting evaluations without improvement; 0 = off
+  select_metric: ap5                 # threshold-free AP at +-5 s on the spotting subset
+
+infer:
+  stride: 10                         # 2 s (matches train-time spotting; displacement voting retains exact timing)
+  nms_window_s: 10                   # +-5 s, matches benchmark tolerance
+  min_score: 0.01
+  vote: true                         # displacement voting
+  windows_per_batch: 16
+  group_windows: 32                  # windows decoded together per loader item
+  num_workers: 0
+
+eval:
+  tolerance_s: 5
+  thresholds: [0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
+  loose_deltas: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]
+
+mine:
+  games_per_round: 100               # train games scanned per mining round (rotating)
+  min_score: 0.30                    # raw score of a false alarm to be kept
+  max_per_half: 20

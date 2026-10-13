@@ -1,0 +1,103 @@
+paths:
+  data_root: soccernet_data
+  split: benchmark/split.json
+  index: data/v2/index.json
+  frames: frames
+  runs: runs
+data:
+  fps: 5
+  cache_len: 45
+  window: 25
+  margin: 7
+  neg_exclusion_s: 60
+  neg_pool: 20000
+  neg_mix:
+    random: 0.5
+    foul: 0.3
+    stoppage: 0.2
+  neg_per_pos: 2.5
+  mined_frac: 0.3
+  eval_neg_per_pos: 2.5
+  jpeg_quality: 90
+  frame_h: 224
+  frame_w: 398
+  seed: 0
+targets:
+  sigma: 5
+  disp_radius: 10
+  clip_weight: 0.5
+  disp_weight: 1.0
+model:
+  backbone: regnet_y_400mf
+  pretrained: true
+  tsm_fold_div: 8
+  attn_heads: 4
+  d_model: 256
+  layers: 4
+  heads: 4
+  ffn: 1024
+  dropout: 0.2
+  attn_dropout: 0.1
+  input_dropout: 0.1
+  grad_checkpoint: false
+augment:
+  hflip: 0.5
+  color_jitter: 0.2
+  crop_scale:
+  - 0.8
+  - 1.0
+train:
+  batch_size: 8
+  epochs: 30
+  lr_backbone: 0.0001
+  lr_head: 0.0003
+  weight_decay: 0.05
+  warmup: 0.05
+  grad_clip: 1.0
+  amp: true
+  ema_decay: 0.999
+  num_workers: 0
+  spot_every: 3
+  spot_subset: val_v1
+  spot_stride: 10
+  patience: 4
+  select_metric: ap5
+infer:
+  stride: 10
+  nms_window_s: 10
+  min_score: 0.01
+  vote: true
+  windows_per_batch: 16
+  group_windows: 32
+  num_workers: 0
+eval:
+  tolerance_s: 5
+  thresholds:
+  - 0.7
+  - 0.75
+  - 0.8
+  - 0.85
+  - 0.9
+  - 0.95
+  loose_deltas:
+  - 5
+  - 10
+  - 15
+  - 20
+  - 25
+  - 30
+  - 35
+  - 40
+  - 45
+  - 50
+  - 55
+  - 60
+mine:
+  games_per_round: 100
+  min_score: 0.3
+  max_per_half: 20
+_cli:
+  init: null
+  mined:
+  - data/v2/mined_round1.json
+  - data/v2/mined_round2.json

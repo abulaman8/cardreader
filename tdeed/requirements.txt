@@ -1,0 +1,4 @@
+# Extra dependency for the T-DEED replica (install into the project venv only):
+#   venv/bin/pip install -r tdeed/requirements.txt
+# timm provides RegNetY-200MF (regnety_002); torchvision has no 200MF variant.
+timm>=1.0,<2

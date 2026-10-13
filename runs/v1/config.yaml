@@ -1,0 +1,90 @@
+paths:
+  data_root: soccernet_data
+  index: data/index.json
+  splits: data/splits.json
+  features: features
+  runs: runs
+data:
+  fps: 10
+  cache_len: 90
+  window: 50
+  margin: 15
+  neg_exclusion_s: 60
+  neg_pool: 15000
+  neg_mix:
+    random: 0.5
+    foul: 0.3
+    stoppage: 0.2
+  neg_per_pos: 4
+  eval_neg_per_pos: 4
+  n_val_games: 20
+  n_test_games: 20
+  seed: 0
+targets:
+  sigma: 10
+  clip_weight: 0.5
+encoder:
+  name: dinov2_vits14
+  dim: 768
+  batch_frames: 256
+  num_workers: 4
+  chunk_frames: 300
+model:
+  d_model: 256
+  layers: 4
+  heads: 4
+  ffn: 1024
+  dropout: 0.2
+  attn_dropout: 0.1
+  input_dropout: 0.1
+  token_drop: 0.1
+  feat_noise: 0.05
+train:
+  batch_size: 128
+  epochs: 40
+  lr: 0.0003
+  weight_decay: 0.05
+  warmup: 0.05
+  grad_clip: 1.0
+  amp: true
+  flip_p: 0.5
+  num_workers: 4
+  patience: 10
+  select_metric: tight_mAP
+infer:
+  stride: 10
+  nms_window_s: 5
+  min_score: 0.01
+  batch_windows: 512
+eval:
+  tight_deltas:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  loose_deltas:
+  - 5
+  - 10
+  - 15
+  - 20
+  - 25
+  - 30
+  - 35
+  - 40
+  - 45
+  - 50
+  - 55
+  - 60
+  thresholds:
+  - 0.7
+  - 0.75
+  - 0.8
+  - 0.85
+  - 0.9
+  - 0.95
+  grid_tolerances_s:
+  - 1
+  - 2
+  - 5
+  select_tolerance_s: 2
