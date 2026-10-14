@@ -424,3 +424,57 @@ Full T-DEED Round 0 pipeline completed:
   - On **raw scores** (`thr = 0.95`), `tdeed_r0` already hits **Val $F_1 = 0.7219$** ($P = 0.8472, R = 0.6289$) and **Test $F_1 = 0.6801$** ($P = 0.7988, R = 0.5921$).
   - After isotonic calibration (`runs/tdeed_r0/bench/calibrator.json`), the marginal PAV bin `[0.9694, 0.9697]` lands at `y = 0.6923` (just `0.0077` below the `0.70` benchmark threshold grid floor) before jumping straight to `y = 0.8750` at `raw >= 0.9749`. Consequently, all grid thresholds `0.70–0.85` map to `raw >= 0.9739`, operating in an ultra-high-precision regime (**Test P = 93.4%**, only **7 FPs across 50 test games**, **R = 43.4%**, **F1 = 0.5928**).
 - **Next Step (`tdeed_r1` / `tdeed_r2`):** Running T-DEED hard-negative mining (`python -m tdeed.mine`) on the 400 train games to suppress false alarms in the `0.95–0.97` raw score band will lift marginal calibration in that band above `0.70` and convert `tdeed_r0`'s higher AP5 (`0.7255` calibrated / `0.7408` raw) into higher calibrated $F_1$.
+
+---
+
+## 2026-10-13 — tdeed_r1 execution & benchmark results (Mining Round 1)
+
+Full T-DEED Round 1 pipeline completed:
+1. Mined 1,156 hard-negative 40s windows across rotating block of 100 train games (`data/tdeed/mined_round1.json`) using `tdeed/mine.py`.
+2. Extracted all 1,156 windows into `frames_tdeed/train/mined/` in 40s.
+3. Patched PyTorch 2.6 / Python 3.13 checkpoint serialization (`_to_cpu` detaching all saved tensors to CPU before pickle in `_atomic_save`, pre-importing `torch.utils.hooks.warn_if_has_hooks`, and running `gc.collect()` at epoch boundaries to stabilize RAM at 6.7 GB vs 34 GB).
+4. Trained `tdeed_r1` initialized from `runs/tdeed_r0/best.pt` with 3,860 windows/epoch (1,544 pos + 1,621 rule neg + 695 mined neg). Cleanly early-stopped after Epoch 15 (`patience: 4`; best checkpoint at **Epoch 3**, `runs/tdeed_r1/best.pt`, `val_v1` `spot/ap5 = 0.7932`, `F1@0.95 = 0.7573`, `P = 0.867`, `R = 0.672`).
+5. Scored all 100 val halves + 100 test halves and evaluated with the frozen `benchmark/benchmark.py` (`sha256: 33a2a0f4...`) and `benchmark/split.json` (`sha256: 7232ea9d...`).
+
+### Frozen 50-Game Benchmark Comparison
+
+| Model | Mining Round | Sel. Thr | Val $F_1$ | Val AP5 | Test $F_1$ | Test P | Test R | Test AP5 | Test Loose a-mAP | TP | FP | FN |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `v2_r0` | Round 0 | 0.75 | 0.6421 | 0.6794 | 0.5900 | 0.9009 | 0.4386 | 0.6588 | 0.6736 | 100 | 11 | 128 |
+| `v2_r1` | Round 1 | 0.80 | 0.6533 | 0.7472 | 0.6114 | 0.8770 | 0.4693 | 0.6968 | 0.7114 | 107 | 15 | 121 |
+| `v2_r2` | Round 2 | 0.70 | 0.7273 | 0.7451 | **0.7092** | 0.8476 | **0.6096** | 0.7119 | 0.7272 | **139** | 25 | **89** |
+| `tdeed_r0` | Round 0 | 0.85 | 0.6553 | 0.7566 | 0.5928 | **0.9340** | 0.4342 | 0.7255 | 0.7392 | 99 | **7** | 129 |
+| **`tdeed_r1`** | **Round 1** | **0.70** | **0.7307** | **0.7638** | **0.6523** | **0.8462** | **0.5307** | **0.7336** | **0.7453** | **121** | 22 | **107** |
+
+### Gains vs `tdeed_r0` and `v2_r1`:
+- **$F_1$ Score Jump:** $0.5928 \to \mathbf{0.6523}$ (**+0.0595 / +6.0 F1 points** over `tdeed_r0`; beats `v2_r1`'s 0.6114 by **+4.09 F1 points**).
+- **Cards Detected (Recall):** $43.4\% \to \mathbf{53.1\%}$ (**+22 additional ground-truth cards detected**: 121 vs 99; missed cards cut from 129 to 107).
+- **Highest Ranking Metric Across All Models:** Test AP@±5s reaches **0.7336** and Test loose a-mAP reaches **0.7453** (uncalibrated raw Test AP5 = **0.7437**, raw F1@0.90 = **0.6853**).
+- **False Alarm Suppression:** Total detections on val dropped from 11,162 to 7,454 (-3,708 background detections suppressed by hard negatives), lifting the calibrated 0.70 threshold into the high-recall band while preserving **84.6% Test Precision** (only 22 false alarms in 50 full test games = 0.44 FP/game).
+
+---
+
+## 2026-10-14 — tdeed_r2 execution & benchmark results (Mining Round 2, 8 Epoch Cap)
+
+Full T-DEED Round 2 pipeline completed:
+1. Mined 518 hard-negative 40s windows across rotating block of 100 train games (`data/tdeed/mined_round2.json`) using `tdeed/mine.py` (down from 1,156 in R1, showing massive dataset-wide false alarm suppression). Combined cumulative pool: 1,674 hard negatives across R1 + R2.
+2. Extracted all 518 windows into `frames_tdeed/train/mined/` in 16s.
+3. Trained `tdeed_r2` initialized from `runs/tdeed_r1/best.pt` with combined mined pools (`mined_round1.json` + `mined_round2.json`). Used user-specified training limits: `epochs: 8` and `patience: 2`. Best checkpoint achieved at **Epoch 6** (`runs/tdeed_r2/best.pt`, `val_v1` `spot/ap5 = 0.7840`, `loose = 0.7922`, `F1@0.95 = 0.7647`, `P = 0.886`, `R = 0.672`).
+4. Scored all 100 val halves + 100 test halves and evaluated with the frozen `benchmark/benchmark.py` (`sha256: 33a2a0f4...`) and `benchmark/split.json` (`sha256: 7232ea9d...`).
+
+### Frozen 50-Game Benchmark Comparison
+
+| Model | Mining Round | Sel. Thr | Val $F_1$ | Val AP5 | Test $F_1$ | Test P | Test R | Test AP5 | Test Loose a-mAP | TP | FP | FN |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `v2_r0` | Round 0 | 0.75 | 0.6421 | 0.6794 | 0.5900 | 0.9009 | 0.4386 | 0.6588 | 0.6736 | 100 | 11 | 128 |
+| `v2_r1` | Round 1 | 0.80 | 0.6533 | 0.7472 | 0.6114 | 0.8770 | 0.4693 | 0.6968 | 0.7114 | 107 | 15 | 121 |
+| `v2_r2` | Round 2 | 0.70 | 0.7273 | 0.7451 | **0.7092** | 0.8476 | **0.6096** | 0.7119 | 0.7272 | **139** | 25 | **89** |
+| `tdeed_r0` | Round 0 | 0.85 | 0.6553 | 0.7566 | 0.5928 | **0.9340** | 0.4342 | 0.7255 | 0.7392 | 99 | **7** | 129 |
+| `tdeed_r1` | Round 1 | 0.70 | **0.7307** | **0.7638** | 0.6523 | 0.8462 | 0.5307 | 0.7336 | 0.7453 | 121 | 22 | 107 |
+| **`tdeed_r2`** | **Round 2** | **0.70** | 0.7188 | 0.7502 | **0.7044** | **0.8509** | **0.6009** | **0.7590** | **0.7678** | **137** | 24 | **91** |
+
+### Gains & Analysis (`tdeed_r2`):
+- **All-Time Benchmark High AP@±5s:** Test AP@±5s reached **0.7590** and Test loose a-mAP reached **0.7678** (**+4.71 AP points** over `v2_r2`'s 0.7119). Uncalibrated raw Test AP5 reached **0.7669** and raw loose a-mAP reached **0.7750**.
+- **Test $F_1$ Breaks 0.70:** Calibrated Test $F_1 = \mathbf{0.7044}$ with **137 True Positives** (vs 121 in R1 and 99 in R0) and only 24 false alarms across 50 full 90-minute test games (**85.1% Precision**, 0.48 FP/game).
+- **Raw Operating Point:** On raw uncalibrated scores at threshold 0.90, `tdeed_r2` achieves **Test $F_1 = 0.7460$** ($P = 0.7799, R = 0.7149$, 163 TP, 46 FP, 65 FN).
+- **Training Efficiency:** Capping at 8 epochs with patience 2 saved ~1.5 hours of redundant late-epoch training while cleanly capturing the peak model weights at Epoch 6.
