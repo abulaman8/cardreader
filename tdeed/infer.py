@@ -8,6 +8,11 @@
 
 Per half: sliding clip_len windows (50% overlap) -> softmax card prob -> displacement voting (per window)
 -> average over overlapping windows -> 1-D NMS (10 s) -> isotonic calibration fitted on val only.
+
+Flip TTA: `--set infer.tta_flip=true` also scores each window mirrored (width flip) and averages the two
+voted probabilities. ~2x inference time. Off by default (also for older checkpoints without the key).
+Default output dir encodes checkpoint stem and TTA: best.pt -> bench/, avg.pt -> bench_avg/,
+best.pt + TTA -> bench_tta/. The printed benchmark run name gets the same suffix.
 """
 import argparse
 import os
@@ -35,6 +40,7 @@ def score_half(model, prefix, cfg, device):
     cnt = torch.zeros(L, device=device)
     ar = torch.arange(T, device=device)
     amp = device.type == "cuda"
+    tta = bool(inf.get("tta_flip", False))
     model.eval()
     B = int(inf["windows_per_batch"])
     for i in range(0, len(starts), B):
@@ -43,11 +49,15 @@ def score_half(model, prefix, cfg, device):
         frames = decode_frames(seq.raw_range(f0, sts[-1] + T - f0), device)   # (F, 3, H, W) uint8, decoded once
         st = torch.tensor(sts, device=device)
         win = frames[(st - f0)[:, None] + ar[None, :]]                          # (b, T, 3, H, W)
-        with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=amp):
-            logits, disp = model(win)
-        p = torch.softmax(logits.float(), dim=-1)[..., 1]
-        if inf["vote"]:
-            p = vote(p, disp.float())
+        views = [win, win.flip(-1)] if tta else [win]                           # flip TTA: mirror width
+        p = 0.0
+        for v in views:
+            with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=amp):
+                logits, disp = model(v)
+            pv = torch.softmax(logits.float(), dim=-1)[..., 1]
+            if inf["vote"]:
+                pv = vote(pv, disp.float())
+            p = p + pv / len(views)
         g = (st[:, None] + ar[None, :]).flatten()
         acc.index_add_(0, g, p.flatten())
         cnt.index_add_(0, g, torch.ones_like(p).flatten())
@@ -86,13 +96,15 @@ def main():
         sec, name = k.split(".", 1)
         cfg[sec][name] = yaml.safe_load(v)
     index = load_index(cfg)
-    out = args.out or os.path.join(os.path.dirname(args.ckpt), "bench")
+    stem = os.path.splitext(os.path.basename(args.ckpt))[0]
+    tag = ("" if stem == "best" else f"_{stem}") + ("_tta" if cfg["infer"].get("tta_flip", False) else "")
+    out = args.out or os.path.join(os.path.dirname(args.ckpt), f"bench{tag}")
     raw = {s: run_spotting(model, cfg, s, keys_for_games(index["splits"][s]), device) for s in ("val", "test")}
     gts, ign = gt_dicts(index, keys_for_games(index["splits"]["val"]))
     print("val (raw scores):", spot_metrics(raw["val"], gts, ign, cfg))
     cal = write_bench(out, index["splits"], raw, gts, ign, float(cfg["eval"]["tolerance_s"]))
     print(f"calibrator fitted on {cal['n']} val detections -> {out}/calibrator.json")
-    run = os.path.basename(os.path.dirname(os.path.abspath(args.ckpt)))
+    run = os.path.basename(os.path.dirname(os.path.abspath(args.ckpt))) + tag
     print(f"\nnext:\n  venv/bin/python benchmark/benchmark.py --run {run} "
           f"--val-pred {out}/calibrated/val --test-pred {out}/calibrated/test")
 

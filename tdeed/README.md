@@ -5,13 +5,14 @@ Encoder-Decoder for Precise Event Spotting in Sports Videos*, CVPRW 2024; refere
 `github.com/arturxe2/T-DEED`). It is adapted for binary card spotting (Yellow, Red and Yellow->red merged
 into one class vs background). It's scored with the frozen `benchmark/` (50 val / 50 test), the same as v1/v2.
 
-Status: **code written, not run.**
+Status: rounds `tdeed_r0`–`tdeed_r2` trained and benchmarked (see `changelog.md`). Flip TTA (`infer.py`) and
+weight averaging (`average.py`) are **written, not run**.
 
 ## Files
 | File | Role |
 |---|---|
 | `config.yaml` | All hyperparameters. Override any key with `--set key=value`. |
-| `common.py` | Config, split/index access, cache paths, JPEG access, batched GPU decode. |
+| `common.py` | Config, split/index access, cache paths, JPEG access, batch decode (CPU libjpeg-turbo, then one GPU copy). |
 | `index.py` | Builds `data/tdeed/index.json`: halves, 40 s train windows (pos/neg), val clip specs. |
 | `extract.py` | Caches train windows as JPEG `.npz` (5 fps, 224x398). Fills missing eval halves only. |
 | `gsm.py` | Gate-Shift Module inserted into RegNet stages s3/s4. |
@@ -19,12 +20,14 @@ Status: **code written, not run.**
 | `augment.py` | T-DEED clip augmentation (hue/sat/brightness/contrast/blur at p=0.25 each, h-flip) + mixup. |
 | `data.py` | Train windows (epoch resampling) and val clips. Items carry raw JPEG bytes. |
 | `train.py` | Training loop: AMP, EMA, warmup+cosine, val clip loss, periodic spotting, best/last checkpoints. |
-| `infer.py` | Sliding windows, displacement voting, NMS, isotonic calibration, SoccerNet-format output. |
-| `mine.py` | Hard-negative mining on train games (for later rounds). |
+| `infer.py` | Sliding windows, displacement voting, optional flip TTA, NMS, isotonic calibration, SoccerNet-format output. |
+| `average.py` | Averages EMA weights of chosen epoch checkpoints into `avg.pt`. |
+| `mine.py` | Hard-negative mining on train games (rotating blocks of 100 games per round). |
 | `spotting.py` | NMS, metrics, calibration, writers (copied from the v2 logic so `src/` is not imported). |
 
 Shared, read-only: `benchmark/split.json`, `soccernet_data/`, and the 5 fps val/test half cache in `frames/eval/`.
 New data goes to `data/tdeed/` and `frames_tdeed/`. Runs go to `runs/tdeed_*`.
+Late fusion with other runs and the cumulative-precision calibration live in `ensemble/` (see its README).
 
 ## Run order
 ```bash
@@ -36,12 +39,30 @@ venv/bin/python -m tdeed.train --name tdeed_r0
 venv/bin/python -m tdeed.infer --ckpt runs/tdeed_r0/best.pt
 venv/bin/python benchmark/benchmark.py --run tdeed_r0 \
     --val-pred runs/tdeed_r0/bench/calibrated/val --test-pred runs/tdeed_r0/bench/calibrated/test
-# later rounds
+# mining rounds (round r scans train games (r-1)*100 .. r*100-1)
 venv/bin/python -m tdeed.mine --ckpt runs/tdeed_r0/best.pt --round 1
 venv/bin/python -m tdeed.extract windows --kind mined --specs data/tdeed/mined_round1.json
 venv/bin/python -m tdeed.train --name tdeed_r1 --init runs/tdeed_r0/best.pt --mined data/tdeed/mined_round1.json
 ```
 For long jobs, use `systemd-run --user --unit=<name> ...` (same as v2).
+
+### Round 3 recipe (planned, not run)
+Round 3 scans train games 200–299, never mined before. The fine-tune uses a lower learning rate: rounds 1–2
+re-warmed a converged model to the full 8e-4, and val loss rose from epoch 1. Selection uses the full
+50-game val instead of the 20-game `val_v1` subset.
+```bash
+venv/bin/python -m tdeed.mine --ckpt runs/tdeed_r2/best.pt --round 3
+venv/bin/python -m tdeed.extract windows --kind mined --specs data/tdeed/mined_round3.json
+venv/bin/python -m tdeed.train --name tdeed_r3 --init runs/tdeed_r2/best.pt \
+    --mined data/tdeed/mined_round1.json data/tdeed/mined_round2.json data/tdeed/mined_round3.json \
+    --set train.epochs=5 train.patience=2 train.warmup_epochs=1 \
+          train.lr_head=2.0e-4 train.lr_backbone=5.0e-5 \
+          train.spot_subset=val train.spot_every=2
+venv/bin/python -m tdeed.average --run runs/tdeed_r3 --epochs 3 4 5          # -> runs/tdeed_r3/avg.pt
+venv/bin/python -m tdeed.infer --ckpt runs/tdeed_r3/best.pt --set infer.tta_flip=true   # -> bench_tta/
+venv/bin/python -m tdeed.infer --ckpt runs/tdeed_r3/avg.pt  --set infer.tta_flip=true   # -> bench_avg_tta/
+# keep whichever has the higher VAL AP, then fuse with v2_r2 (ensemble/README.md)
+```
 
 ## Design decisions (agreed)
 - **Frames:** 5 fps, 224x398 full frame. Clip = 100 frames = 20 s.
@@ -72,7 +93,7 @@ For long jobs, use `systemd-run --user --unit=<name> ...` (same as v2).
 - The reference used CUDA-only GSM code. Here it's re-implemented device-agnostic, with identical math.
 - Mixup partner is drawn from the same batch instead of a second dataset sample.
 - The SGP-Mixer upsamples to the skip length dynamically, instead of a fixed `t_size`. Same result for fixed clips.
-- Frames are decoded batched on the GPU (nvjpeg). DataLoader workers default to 0, because worker IPC crashed the v2 runs.
+- Frames are decoded on the CPU (libjpeg-turbo) and copied to the GPU in one transfer. GPU nvjpeg decode was dropped after `CUDA error 716` on val half #21. DataLoader workers default to 0, because worker IPC crashed the v2 runs.
 - The reference trains on random clips from full videos. Here it uses card-centred + negative windows, since cards are sparse (~1 per 30 min).
 - Post-processing adds isotonic calibration, so the benchmark's fixed 0.70-0.95 thresholds are meaningful.
 

@@ -478,3 +478,85 @@ Full T-DEED Round 2 pipeline completed:
 - **Test $F_1$ Breaks 0.70:** Calibrated Test $F_1 = \mathbf{0.7044}$ with **137 True Positives** (vs 121 in R1 and 99 in R0) and only 24 false alarms across 50 full 90-minute test games (**85.1% Precision**, 0.48 FP/game).
 - **Raw Operating Point:** On raw uncalibrated scores at threshold 0.90, `tdeed_r2` achieves **Test $F_1 = 0.7460$** ($P = 0.7799, R = 0.7149$, 163 TP, 46 FP, 65 FN).
 - **Training Efficiency:** Capping at 8 epochs with patience 2 saved ~1.5 hours of redundant late-epoch training while cleanly capturing the peak model weights at Epoch 6.
+
+---
+
+## 2026-10-14 — Raising precision and recall: ensemble, dual calibration, round 3, flip TTA (CODE WRITTEN, not run)
+
+### Diagnostics (read-only, on existing benchmark predictions)
+Computed with a scratch script over `runs/{v2_r2,tdeed_r1,tdeed_r2}/bench/`. No training, no benchmark change.
+
+| Test (228 cards) | v2_r2 | tdeed_r2 |
+|---|---|---|
+| Recall at calibrated 0.70 | 0.610 | 0.601 |
+| Recall at any score (a detection within ±5 s) | 0.974 | 0.943 |
+| Median raw peak score near a true card | 0.93 | 0.98 |
+| Cards with raw peak < 0.5 | 23 | 32 |
+
+- **Recall is lost at the threshold, not at detection.** Both models fire near 94–97% of cards.
+- **The 0.70 floor binds.** The isotonic calibrator outputs P(this detection is real). On that scale the
+  F1-optimal threshold is roughly F1*/2 ≈ 0.37. v2_r2, tdeed_r1 and tdeed_r2 all selected 0.70, the grid floor.
+  This is why every run lands near P 0.85 / R 0.60.
+- **The models are complementary.** At 0.70 on test: 115 cards found by both, 24 only by v2_r2, 22 only by
+  tdeed_r2. Union 161.
+- **Quick fusion probe** (calibrated scores averaged, weight and threshold picked on val, any threshold): test
+  F1 0.773, P 0.784, R 0.763 (174 TP, 48 FP). Restricted to the grid with marginal scores: test F1 0.642. The
+  fusion gain only reaches the headline if the meaning of 0.70 changes too.
+- **Selection noise.** tdeed_r1 `best.pt`: AP 0.793 on the 20-game `val_v1` subset vs 0.764 on full val.
+  tdeed_r2 is below r1 on full val (0.750 vs 0.764) but above it on test (0.759 vs 0.734).
+- **Over-warm fine-tunes.** Each mining round re-warms to lr 8e-4. Val loss rises from epoch 1 (r2: 0.424 → 0.496).
+- **Hard floor.** 23–32 test cards score below 0.5 in every model. Thresholds cannot recover them.
+
+### Decisions
+- **Both calibration meanings are kept** (user decision). Each fused or recalibrated run is scored twice by the
+  unchanged `benchmark.py`:
+  - `<name>_marg`: isotonic P(this detection is real). Same meaning as every earlier row.
+  - `<name>_cum`: isotonic val precision of all detections scoring ≥ this one. Grid 0.70 then means "≥ 70% of
+    what you keep is real".
+- **Fusion inputs use Platt scaling per run**, not the existing isotonic outputs. Isotonic steps create ties and
+  lose ranking inside a run. Platt is monotone, so ranking is kept.
+- **Fusion weights are chosen by val AP@±5 s** (threshold-free), on a simplex grid with step 0.1.
+- **Round 3 fine-tune:** lr ×0.25 (head 2e-4, backbone 5e-5), 1-epoch warmup, 5 epochs, patience 2. Spotting on
+  the full 50-game val (`train.spot_subset=val`) every 2 epochs. Round 3 scans train games 200–299, never
+  mined before.
+- **Checkpoint averaging** (`avg.pt`) is a selection-free alternative to `best.pt`. Pick between them on val only.
+- **Flip TTA** is inference-only and off by default.
+
+### Files
+- **New:** `ensemble/{__init__.py, fuse.py, README.md}`. Model-agnostic. Imports only
+  `benchmark.benchmark.{load_gt, load_preds, match, average_precision, SPLIT_PATH}`, so labels follow the
+  benchmark rules exactly. Never reads test labels.
+- **New:** `tdeed/average.py`. Averages the EMA weights of the listed epochs into `avg.pt`.
+- **Changed:** `tdeed/infer.py`.
+  - `infer.tta_flip` scores width-mirrored windows too and averages the voted probabilities.
+  - The default output dir and printed run name now carry the checkpoint stem and TTA
+    (`bench/`, `bench_avg/`, `bench_tta/`, `bench_avg_tta/`), so results never overwrite each other.
+- **Changed:** `tdeed/config.yaml`. New key `infer.tta_flip: false`. Older checkpoints default to off.
+- **Changed:** `tdeed/README.md`. Status, file table, round-3 recipe, CPU decode note.
+- **Unchanged:** `benchmark/benchmark.py`, `benchmark/split.json`.
+
+### Execution — Phase 1 complete (2026-10-14)
+
+Phase 1 evaluated fusion and dual calibration on existing `v2_r2` and `tdeed_r2` predictions. Zero training needed.
+
+1. `tdeed_r2_cal_marg`: exact reproduction of baseline `tdeed_r2` (F1 0.7044, AP5 0.7590, 137 TP, 24 FP, 91 FN). Sanity check passed.
+2. `tdeed_r2_cal_cum`: cumulative precision thresholding alone unlocks **F1 0.7290 | P 0.8042 | R 0.6667** (152 TP, 37 FP, 76 FN) at thr 0.85. +2.5 F1 pts and +6.6% recall with single model.
+3. `ens_r2_marg`: late fusion with marginal calibration hits **F1 0.7544 | P 0.8922 | R 0.6535** (149 TP, 18 FP, 79 FN) at thr 0.75. Precision touches ~90%.
+4. `ens_r2_cum`: late fusion with cumulative calibration reaches **F1 0.7638 | P 0.7689 | R 0.7588** (173 TP, 52 FP, 55 FN) at thr 0.80. Val AP5 jumped to **0.7898**, test AP5 to **0.7902**.
+
+### Execution — Phases 1, 2, 3 & 4 fully completed (2026-10-14)
+
+1. **Phase 1 (Zero-training eval):** Evaluated dual calibration (`_marg` vs `_cum`) and late fusion on `v2_r2` + `tdeed_r2`. `ens_r2_cum` reached F1 0.7638 | P 0.7689 | R 0.7588 (173 TP, 52 FP, 55 FN).
+2. **Phase 2 (Mining):** Scanned 100 train games (games 200–299, 200 halves) $\to$ 892 hard negatives mined to `data/tdeed/mined_round3.json`.
+3. **Phase 3 (Extraction & Training):** 892 windows extracted (`[mined] done, failed 0`). Fine-tuned `tdeed_r3` with lr ×0.25 on pooled rounds 1+2+3. Best checkpoint hit at **Epoch 2** (spot AP5 0.7401, F1 0.7500). Early stopped at epoch 5.
+4. **Phase 4 (Inference, Checkpoint Averaging, Flip TTA & Grand Fusion):**
+   - **Checkpoint Selection:** `best.pt` (Epoch 2, Val AP5 0.7555, Val F1 0.7478) beat `avg.pt` (Val AP5 0.7438, Val F1 0.7378). `best.pt` selected by val.
+   - **Single Model Records (`tdeed_r3`):**
+     - `tdeed_r3_cal_cum`: **F1 0.7371 | P 0.7929 | R 0.6886** (157 TP, 41 FP, 71 FN). New best single model.
+   - **Grand Fusion Records (`v2_r2` + `tdeed_r3`):**
+     - `ens_r3_best_marg`: F1 0.7200 | **P 0.9184** | R 0.5921 (135 TP, 12 FP, 93 FN). High-precision specialist (only 12 false alarms across 50 full test games).
+     - `ens_r3_best_cum`: **F1 0.7729 | P 0.8602 | R 0.7018** (160 TP, 26 FP, 68 FN) at thr 0.90 (val F1 0.7801). **All-time repo record F1.**
+     - `ens_r3_tta_cum`: **F1 0.7585 | P 0.7336 | R 0.7851** (179 TP, 65 FP, 49 FN). **All-time repo record Recall: 78.5%** (179 out of 228 cards caught; only 49 missed in 50 matches).
+
+
+

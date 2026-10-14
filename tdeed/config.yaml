@@ -84,6 +84,7 @@ infer:
   vote: true                           # T-DEED displacement voting (frame t -> t - displ, max aggregation)
   nms_window_s: 10                     # +-5 s, matches the benchmark tolerance
   min_score: 0.01
+  tta_flip: false                      # also score width-mirrored windows and average (~2x inference time)
 
 eval:
   tolerance_s: 5
